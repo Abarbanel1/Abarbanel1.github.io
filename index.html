@@ -1,23 +1,31 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Abarbanel Sync</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Inventory App</title>
 </head>
 <body>
 
 <h2>Inventory</h2>
-<input id="name" placeholder="Item name">
-<input id="qty" placeholder="Qty">
-<button onclick="addItem()">Add</button>
+
+<input type="text" id="name" placeholder="Item name">
+<input type="number" id="qty" placeholder="Quantity">
+<input type="file" id="image">
+<button onclick="addItem()">Add Item</button>
 
 <ul id="inventory"></ul>
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.12.0/firebase-app.js";
-import { getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc } from "https://www.gstatic.com/firebasejs/12.12.0/firebase-firestore.js";
+import { 
+  getFirestore, collection, addDoc, onSnapshot, deleteDoc, doc 
+} from "https://www.gstatic.com/firebasejs/12.12.0/firebase-firestore.js";
+import { 
+  getStorage, ref, uploadBytes, getDownloadURL, deleteObject 
+} from "https://www.gstatic.com/firebasejs/12.12.0/firebase-storage.js";
 
+// 🔥 YOUR CONFIG
 const firebaseConfig = {
   apiKey: "AIzaSyAR2gzmNBsJOtmBsUkYIoTqeNeX63_0FCg",
   authDomain: "abarbanel-12ecb.firebaseapp.com",
@@ -29,50 +37,130 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
+const storage = getStorage(app);
 
 const list = document.getElementById("inventory");
 
-// REALTIME SYNC
-onSnapshot(collection(db, "inventory"), (snapshot) => {
+//////////////////////////
+// 🔄 REALTIME SYNC
+//////////////////////////
+onSnapshot(collection(db, "bags"), (snapshot) => {
   list.innerHTML = "";
 
   snapshot.forEach((docSnap) => {
     const item = docSnap.data();
 
     const li = document.createElement("li");
-    li.textContent = item.name + " (" + item.qty + ")";
 
-    // delete button
+    const text = document.createElement("div");
+    text.textContent = item.name + " (" + item.qty + ")";
+
+    const img = document.createElement("img");
+    if (item.imageUrl) {
+      img.src = item.imageUrl;
+      img.style.width = "80px";
+      img.style.display = "block";
+    }
+
     const del = document.createElement("button");
-    del.textContent = "❌";
-    del.onclick = () => deleteItem(docSnap.id);
+    del.textContent = "Delete";
+    del.onclick = () => deleteItem(docSnap.id, item.imageUrl);
 
+    li.appendChild(text);
+    li.appendChild(img);
     li.appendChild(del);
+
     list.appendChild(li);
   });
 });
 
-// ADD ITEM
+//////////////////////////
+// 🧠 COMPRESS IMAGE
+//////////////////////////
+async function compressImage(file) {
+  const img = document.createElement("img");
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      img.onload = () => {
+        const maxWidth = 800;
+        const scale = maxWidth / img.width;
+
+        canvas.width = maxWidth;
+        canvas.height = img.height * scale;
+
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+        canvas.toBlob((blob) => {
+          resolve(blob);
+        }, "image/jpeg", 0.7);
+      };
+
+      img.src = e.target.result;
+    };
+
+    reader.readAsDataURL(file);
+  });
+}
+
+//////////////////////////
+// ☁️ UPLOAD IMAGE
+//////////////////////////
+async function uploadImage(file) {
+  const fileName = Date.now() + "_" + Math.random().toString(36).slice(2);
+  const storageRef = ref(storage, "images/" + fileName);
+
+  await uploadBytes(storageRef, file);
+  return await getDownloadURL(storageRef);
+}
+
+//////////////////////////
+// ➕ ADD ITEM
+//////////////////////////
 window.addItem = async function () {
   const name = document.getElementById("name").value;
   const qty = document.getElementById("qty").value;
+  const file = document.getElementById("image").files[0];
 
   if (!name || !qty) return;
 
-  await addDoc(collection(db, "inventory"), {
-  name,
-  qty,
-  createdAt: Date.now(),
-  status: "available"
-});
+  let imageUrl = null;
+
+  if (file) {
+    const compressed = await compressImage(file);
+    imageUrl = await uploadImage(compressed);
+  }
+
+  await addDoc(collection(db, "bags"), {
+    name,
+    qty,
+    imageUrl,
+    createdAt: Date.now()
+  });
 
   document.getElementById("name").value = "";
   document.getElementById("qty").value = "";
+  document.getElementById("image").value = "";
 };
 
-// DELETE ITEM
-async function deleteItem(id) {
-  await deleteDoc(doc(db, "inventory", id));
+//////////////////////////
+// 🗑 DELETE ITEM + IMAGE
+//////////////////////////
+async function deleteItem(id, imageUrl) {
+  await deleteDoc(doc(db, "bags", id));
+
+  if (imageUrl) {
+    try {
+      const imageRef = ref(storage, imageUrl);
+      await deleteObject(imageRef);
+    } catch (e) {
+      console.log("Image delete skipped");
+    }
+  }
 }
 </script>
 
