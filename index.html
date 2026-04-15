@@ -60,9 +60,11 @@ window.addItem = async function () {
   if (!name || !qty) return;
 
   await addDoc(collection(db, "inventory"), {
-    name,
-    qty
-  });
+  name,
+  qty,
+  createdAt: Date.now(),
+  status: "available"
+});
 
   document.getElementById("name").value = "";
   document.getElementById("qty").value = "";
