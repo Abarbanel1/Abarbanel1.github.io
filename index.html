@@ -180,8 +180,9 @@ body{font-family:-apple-system,"Helvetica Neue",sans-serif;background:var(--bg3)
 .field textarea{resize:vertical;min-height:58px;}
 .modal-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:8px;}
 .modal-img-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;}
-.modal-img-slot{border:0.5px dashed var(--b2);border-radius:var(--r);overflow:hidden;cursor:pointer;background:var(--bg2);}
-.modal-img-slot:hover{border-color:var(--purple);}
+.modal-img-slot{border:1.5px dashed var(--b2);border-radius:var(--r);overflow:hidden;cursor:pointer;background:var(--bg2);transition:border-color .15s,background .15s;}
+.modal-img-slot:hover{border-color:var(--purple);background:var(--bg);}
+.modal-img-slot.drag-over{border-color:var(--purple);background:rgba(108,71,212,.07);border-style:solid;}
 .modal-slot-label{font-size:10px;color:var(--txt3);padding:5px 8px;text-align:center;font-weight:500;text-transform:uppercase;letter-spacing:.04em;border-bottom:0.5px solid var(--b1);background:var(--bg);}
 .modal-slot-area{padding:13px 8px;text-align:center;font-size:11px;color:var(--txt3);}
 .modal-slot-prev{width:100%;aspect-ratio:1;object-fit:cover;display:none;}
@@ -319,10 +320,10 @@ body{font-family:-apple-system,"Helvetica Neue",sans-serif;background:var(--bg3)
     <div class="field"><label>Notes (optional)</label><textarea id="f-notes" placeholder="e.g. extra glossy, unique marking..."></textarea></div>
     <div id="modal-imgs" class="field"><label>Photos (add now or later)</label>
       <div class="modal-img-grid">
-        <div class="modal-img-slot" onclick="triggerModalCapture('frontPhoto')"><div class="modal-slot-label">Front Photo</div><img class="modal-slot-prev" id="mprev-frontPhoto"/><div class="modal-slot-area" id="marea-frontPhoto">Capture or upload</div></div>
-        <div class="modal-img-slot" onclick="triggerModalCapture('backPhoto')"><div class="modal-slot-label">Back Photo</div><img class="modal-slot-prev" id="mprev-backPhoto"/><div class="modal-slot-area" id="marea-backPhoto">Capture or upload</div></div>
-        <div class="modal-img-slot" onclick="triggerModalImg('frontAI')"><div class="modal-slot-label">Front AI</div><img class="modal-slot-prev" id="mprev-frontAI"/><div class="modal-slot-area" id="marea-frontAI">+ Upload</div></div>
-        <div class="modal-img-slot" onclick="triggerModalImg('backAI')"><div class="modal-slot-label">Back AI</div><img class="modal-slot-prev" id="mprev-backAI"/><div class="modal-slot-area" id="marea-backAI">+ Upload</div></div>
+        <div class="modal-img-slot" id="mslot-frontPhoto" onclick="triggerModalCapture('frontPhoto')" ondragover="handleDragOver(event,'frontPhoto')" ondragleave="handleDragLeave(event,'frontPhoto')" ondrop="handleDrop(event,'frontPhoto')"><div class="modal-slot-label">Front Photo</div><img class="modal-slot-prev" id="mprev-frontPhoto"/><div class="modal-slot-area" id="marea-frontPhoto">&#128247; Tap or drop photo</div></div>
+        <div class="modal-img-slot" id="mslot-backPhoto" onclick="triggerModalCapture('backPhoto')" ondragover="handleDragOver(event,'backPhoto')" ondragleave="handleDragLeave(event,'backPhoto')" ondrop="handleDrop(event,'backPhoto')"><div class="modal-slot-label">Back Photo</div><img class="modal-slot-prev" id="mprev-backPhoto"/><div class="modal-slot-area" id="marea-backPhoto">&#128247; Tap or drop photo</div></div>
+        <div class="modal-img-slot" id="mslot-frontAI" onclick="triggerModalImg('frontAI')" ondragover="handleDragOver(event,'frontAI')" ondragleave="handleDragLeave(event,'frontAI')" ondrop="handleDrop(event,'frontAI')"><div class="modal-slot-label">Front AI &#10022;</div><img class="modal-slot-prev" id="mprev-frontAI"/><div class="modal-slot-area" id="marea-frontAI">&#128444; Tap or drop</div></div>
+        <div class="modal-img-slot" id="mslot-backAI" onclick="triggerModalImg('backAI')" ondragover="handleDragOver(event,'backAI')" ondragleave="handleDragLeave(event,'backAI')" ondrop="handleDrop(event,'backAI')"><div class="modal-slot-label">Back AI &#10022;</div><img class="modal-slot-prev" id="mprev-backAI"/><div class="modal-slot-area" id="marea-backAI">&#128444; Tap or drop</div></div>
       </div>
     </div>
     <div class="modal-btns"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="modal-save-btn" onclick="saveModal()">Add bag</button></div>
@@ -749,10 +750,20 @@ window.confirmLink=async function(){if(!selectedToLink.size){closeLinkModal();re
 window.askDelete=function(){const b=getBag(currentId);document.getElementById("confirm-msg").textContent="Delete bag "+b.id+"? This cannot be undone.";document.getElementById("confirm-modal").classList.add("open");}
 window.closeConfirm=function(){document.getElementById("confirm-modal").classList.remove("open");}
 window.confirmDelete=async function(){
-  closeConfirm();const id=currentId;
-  for(const s of["frontPhoto","backPhoto","frontAI","backAI"])await deleteImageDoc(id,s);
+  closeConfirm();
+  const id=currentId;
+  toast("Deleting...");
+  // Delete all image docs from Firestore
+  const slots=["frontPhoto","backPhoto","frontAI","backAI"];
+  await Promise.all(slots.map(s=>deleteImageDoc(id,s)));
+  // Delete set links doc
+  try{await deleteDoc(doc(db,"sets",id));}catch(e){}
+  // Delete the bag doc itself
   await deleteBagDoc(id);
-  toast("Bag deleted");showList();
+  // Bust image cache
+  slots.forEach(s=>bustCache(id,s));
+  toast("Bag deleted");
+  showList();
 }
 
 // ── CAPTURE ──
@@ -1038,6 +1049,30 @@ window.kebabAction = async function(action) {
     document.getElementById("confirm-msg").textContent = "Delete bag " + id + "? This cannot be undone.";
     document.getElementById("confirm-modal").classList.add("open");
   }
+};
+
+// ── DRAG AND DROP ──
+window.handleDragOver = function(e, slot) {
+  e.preventDefault();
+  e.stopPropagation();
+  document.getElementById("mslot-"+slot).classList.add("drag-over");
+};
+window.handleDragLeave = function(e, slot) {
+  e.preventDefault();
+  document.getElementById("mslot-"+slot).classList.remove("drag-over");
+};
+window.handleDrop = async function(e, slot) {
+  e.preventDefault();
+  e.stopPropagation();
+  document.getElementById("mslot-"+slot).classList.remove("drag-over");
+  const file = e.dataTransfer.files[0];
+  if (!file || !file.type.startsWith("image/")) { toast("Please drop an image file"); return; }
+  const dataUrl = await fileToDataUrl(file);
+  const compressed = await compressImage(dataUrl, 1000, .80);
+  modalImgs[slot] = compressed;
+  document.getElementById("mprev-"+slot).src = compressed;
+  document.getElementById("mprev-"+slot).style.display = "block";
+  document.getElementById("marea-"+slot).style.display = "none";
 };
 // ── INIT ──
 loadSavedLogo();
