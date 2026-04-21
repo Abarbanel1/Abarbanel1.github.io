@@ -415,15 +415,15 @@ body{font-family:-apple-system,"Helvetica Neue",sans-serif;background:var(--bg3)
           <div style="font-size:11px;color:var(--ink3);margin-top:8px;">Zebra ZP 550 - 4x6.25in - QR code</div>
         </div>
         <div class="fp-panel">
-          <div class="fp-title">&#10022; Generate AI product shots</div>
+          <div class="fp-title">Generate AI product shots</div>
           <div class="fp-steps">
-            <div class="fp-step"><div class="fp-num">1</div><span><strong>Tap below</strong> — photo saves to your camera roll + prompt auto-copied</span></div>
-            <div class="fp-step"><div class="fp-num">2</div><span><strong>In Adobe Firefly:</strong> select Nano Banana 2, square 1:1, 1K res, paste prompt, upload photo → Generate</span></div>
-            <div class="fp-step"><div class="fp-num">3</div><span>Download result → tap the AI slot above to upload it here</span></div>
+            <div class="fp-step"><div class="fp-num">1</div><span>Tap below - photo downloads + prompt copies + Freepik opens</span></div>
+            <div class="fp-step"><div class="fp-num">2</div><span>Nano Banana 2 - paste prompt - upload - Generate</span></div>
+            <div class="fp-step"><div class="fp-num">3</div><span>Download result - tap AI slot above to upload</span></div>
           </div>
           <div class="fp-btns">
-            <button class="fp-btn" onclick="startAIFlow('front')">&#8595; Front</button>
-            <button class="fp-btn" onclick="startAIFlow('back')">&#8595; Back</button>
+            <button class="fp-btn" onclick="startFreepikFlow('front')">Front</button>
+            <button class="fp-btn" onclick="startFreepikFlow('back')">Back</button>
           </div>
         </div>
         <div class="set-panel">
@@ -463,10 +463,7 @@ body{font-family:-apple-system,"Helvetica Neue",sans-serif;background:var(--bg3)
     <div class="settings-section">
       <div class="settings-section-title">AI Generation Prompt</div>
       <div class="settings-body-inner">
-        <div class="field"><textarea id="prompt-input" rows="6">I need this bag on a flat white surface. It should have a natural shadow to it, nice lighting; it should look really professional.
-Camera angle from the top looking straight down.
-It should be flat; it shouldn't be popping up the bag.
-It needs to be on a solid white background.</textarea></div>
+        <div class="field"><textarea id="prompt-input" rows="4">handcrafted fur bag product photography, pure white background, natural drop shadow, sharp crisp edges, no creases, fur texture preserved, centered, generous breathing room, square format, studio quality</textarea></div>
         <button class="btn btn-primary" onclick="savePrompt()">Save prompt</button>
       </div>
     </div>
@@ -504,6 +501,7 @@ It needs to be on a solid white background.</textarea></div>
 <script type="module">
 import{initializeApp}from"https://www.gstatic.com/firebasejs/12.12.0/firebase-app.js";
 import{getFirestore,collection,doc,setDoc,deleteDoc,onSnapshot,getDoc}from"https://www.gstatic.com/firebasejs/12.12.0/firebase-firestore.js";
+import{getStorage,ref,uploadString,getDownloadURL,deleteObject}from"https://www.gstatic.com/firebasejs/12.12.0/firebase-storage.js";
 
 const firebaseConfig={
   apiKey:"AIzaSyAR2gzmNBsJOtmBsUkYIoTqeNeX63_0FCg",
@@ -516,22 +514,34 @@ const firebaseConfig={
 
 const fbApp=initializeApp(firebaseConfig);
 const db=getFirestore(fbApp);
+const storage=getStorage(fbApp);
 
 // ── IMAGES: stored in separate Firestore docs to avoid 1MB doc limit ──
 // bags/{id} => bag metadata only
-// bag_images/{id_slot} => {data: base64string}
+// Images stored in Firebase Storage: bags/{bagId}/{slot}.jpg
+// Firestore bag_images/{id_slot} caches the download URL for fast access
 async function saveImageDoc(bagId,slot,dataUrl){
-  const key=bagId+"_"+slot;
-  await setDoc(doc(db,"bag_images",key),{data:dataUrl,bagId,slot,updated:Date.now()});
+  // Upload to Storage
+  const storageRef=ref(storage,"bags/"+bagId+"/"+slot+".jpg");
+  const b64=dataUrl.includes(",")?dataUrl.split(",")[1]:dataUrl;
+  await uploadString(storageRef,b64,"base64",{contentType:"image/jpeg"});
+  const url=await getDownloadURL(storageRef);
+  // Cache URL in Firestore
+  await setDoc(doc(db,"bag_images",bagId+"_"+slot),{url,bagId,slot,updated:Date.now()});
+  return url;
 }
 async function getImageDoc(bagId,slot){
-  const key=bagId+"_"+slot;
   try{
-    const d=await getDoc(doc(db,"bag_images",key));
-    return d.exists()?d.data().data:null;
+    // Try Firestore URL cache first
+    const d=await getDoc(doc(db,"bag_images",bagId+"_"+slot));
+    if(d.exists()&&d.data().url)return d.data().url;
+    if(d.exists()&&d.data().data)return d.data().data; // legacy base64
+    // Fall back to Storage directly
+    return await getDownloadURL(ref(storage,"bags/"+bagId+"/"+slot+".jpg"));
   }catch(e){return null;}
 }
 async function deleteImageDoc(bagId,slot){
+  try{await deleteObject(ref(storage,"bags/"+bagId+"/"+slot+".jpg"));}catch(e){}
   try{await deleteDoc(doc(db,"bag_images",bagId+"_"+slot));}catch(e){}
 }
 
@@ -553,7 +563,7 @@ let scannerStream=null;let scannerTimer=null;let selectedToLink=new Set();
 let activeFilters={status:new Set(),color:new Set(),size:new Set(),pattern:new Set()};
 const sizeCode={"14x14":"T14","16x16":"T16","9x9":"TF9"};
 const counters={"14x14":0,"16x16":0,"9x9":0};
-const getPrompt=()=>AI_PROMPT;
+const getPrompt=()=>localStorage.getItem("ab_prompt")||"handcrafted fur bag product photography, pure white background, natural drop shadow, sharp crisp edges, no creases, fur texture preserved, centered, generous breathing room, square format, studio quality";
 function initCounters(){bags.forEach(b=>{const n=parseInt((b.id||"").split("-")[1]||"0");if(n>(counters[b.size]||0))counters[b.size]=n;});}
 function genId(s){counters[s]=(counters[s]||0)+1;return sizeCode[s]+"-"+String(counters[s]).padStart(3,"0");}
 const getBag=id=>bags.find(b=>b.id===id);
@@ -774,7 +784,7 @@ window.openCaptureModal=function(slot){
   currentSlot=slot;
   const labels={frontPhoto:"Front Photo",backPhoto:"Back Photo",frontAI:"Front AI Result",backAI:"Back AI Result"};
   document.getElementById("capture-title").textContent="Add "+labels[slot];
-  document.getElementById("capture-sub").textContent=slot.includes("AI")?"Upload the AI result from Adobe Firefly":"Take a new photo or choose from your camera roll";
+  document.getElementById("capture-sub").textContent=slot.includes("AI")?"Upload the AI result from Freepik":"Take a new photo or choose from your camera roll";
   if(slot.includes("AI")){triggerCapture("gallery");return;}
   document.getElementById("capture-modal").classList.add("open");
 }
@@ -791,42 +801,17 @@ window.handleCaptureFile=async function(input){
   toast("Photo saved!");
 }
 
-// ── ADOBE FIREFLY AI FLOW ──
-const AI_PROMPT = "I need this bag on a flat white surface. It should have a natural shadow to it, nice lighting; it should look really professional.\nCamera angle from the top looking straight down.\nIt should be flat; it shouldn't be popping up the bag.\nIt needs to be on a solid white background.";
-let fireflyTab = null;
-window.startAIFlow = async function(side) {
-  const b = getBag(currentId);
-  const slot = side === "front" ? "frontPhoto" : "backPhoto";
-  const img = await getCachedImg(b.id, slot);
-  if (!img) { toast("Add the " + side + " photo first"); return; }
-
-  // Copy prompt to clipboard
-  try { await navigator.clipboard.writeText(AI_PROMPT); } catch(e) {}
-
-  // Download photo to camera roll
-  const a = document.createElement("a");
-  a.href = img;
-  a.download = "abarbanel-" + b.id + "-" + side + ".jpg";
-  a.click();
-
-  // Open Firefly only if not already open
-  // Firefly URL with Nano Banana 2, square 1:1, 1K
-  const fireflyUrl = "https://firefly.adobe.com/generate/image";
-  setTimeout(() => {
-    try {
-      if (fireflyTab && !fireflyTab.closed) {
-        fireflyTab.focus();
-        toast("Photo saved \u2014 Firefly already open, prompt copied!");
-      } else {
-        fireflyTab = window.open(fireflyUrl, "adobe_firefly");
-        toast("Photo saved + Adobe Firefly opening...", 3000);
-      }
-    } catch(e) {
-      fireflyTab = window.open(fireflyUrl, "adobe_firefly");
-      toast("Photo saved + Adobe Firefly opening...", 3000);
-    }
-  }, 600);
-};
+// ── FREEPIK ──
+window.startFreepikFlow=async function(side){
+  const b=getBag(currentId);
+  const slot=side==="front"?"frontPhoto":"backPhoto";
+  const img=await getCachedImg(b.id,slot);
+  if(!img){toast("Add the "+side+" photo first");return;}
+  try{await navigator.clipboard.writeText(getPrompt());}catch(e){}
+  const a=document.createElement("a");a.href=img;a.download="abarbanel-"+b.id+"-"+side+".jpg";a.click();
+  setTimeout(()=>window.open("https://www.freepik.com/ai/image-generator?model=nano-banana-2","_blank"),800);
+  toast("Photo downloaded + Freepik opening...",3000);
+}
 
 // ── ADD/EDIT MODAL ──
 window.openAddModal=function(){
@@ -973,23 +958,50 @@ window.doShare=async function(mode){
   const srcs=mode==="front"?[front]:mode==="back"?[back]:[front,back].filter(Boolean);
   await stampAndShare(srcs,b.id);
 }
-const loadImgEl=src=>new Promise(r=>{const i=new Image();i.onload=()=>r(i);i.src=src;});
+function loadImgEl(src){
+  return new Promise((res,rej)=>{
+    const i=new Image();
+    // Set crossOrigin for Storage URLs so canvas doesn't get tainted
+    if(src&&!src.startsWith("data:"))i.crossOrigin="anonymous";
+    i.onload=()=>res(i);
+    i.onerror=rej;
+    i.src=src;
+  });
+}
 async function stampAndShare(srcs,bagId){
-  const imgs=await Promise.all(srcs.map(loadImgEl));
-  const canvas=document.getElementById("stamp-canvas");const ctx=canvas.getContext("2d");
-  const w=imgs[0].width;const gap=imgs.length>1?Math.round(w*.012):0;
-  const totalH=imgs.reduce((s,i)=>s+i.height,0)+(imgs.length>1?gap:0);
-  canvas.width=w;canvas.height=totalH;let y=0;
-  imgs.forEach((img,i)=>{ctx.drawImage(img,0,y,w,img.height);y+=img.height+(i<imgs.length-1?gap:0);});
-  const fs=Math.round(w*.013);
-  ctx.font="300 "+fs+"px Helvetica Neue,Helvetica,Arial,sans-serif";
-  ctx.shadowColor="rgba(255,255,255,.8)";ctx.shadowBlur=Math.round(fs*.6);
-  ctx.fillStyle="#555550";ctx.fillText("ITEM #"+bagId,Math.round(w*.025),totalH-Math.round(w*.025));ctx.shadowBlur=0;
-  canvas.toBlob(async blob=>{
+  try{
+    const imgs=await Promise.all(srcs.map(loadImgEl));
+    const canvas=document.getElementById("stamp-canvas");
+    const ctx=canvas.getContext("2d");
+    const w=imgs[0].naturalWidth||imgs[0].width;
+    const gap=0;
+    const totalH=imgs.reduce((s,i)=>s+(i.naturalHeight||i.height),0)+(imgs.length>1?gap:0);
+    canvas.width=w;canvas.height=totalH;let y=0;
+    imgs.forEach((img,i)=>{
+      const h=img.naturalHeight||img.height;
+      ctx.drawImage(img,0,y,w,h);
+      y+=h+(i<imgs.length-1?gap:0);
+    });
+    const fs=Math.round(w*.013);
+    ctx.font="300 "+fs+"px Helvetica Neue,Helvetica,Arial,sans-serif";
+    ctx.shadowColor="rgba(255,255,255,.8)";ctx.shadowBlur=Math.round(fs*.6);
+    ctx.fillStyle="#555550";ctx.fillText("ITEM #"+bagId,Math.round(w*.025),totalH-Math.round(w*.025));ctx.shadowBlur=0;
+    const blob=await new Promise(r=>canvas.toBlob(r,"image/jpeg",.93));
     const file=new File([blob],"abarbanel-"+bagId+".jpg",{type:"image/jpeg"});
-    if(navigator.canShare&&navigator.canShare({files:[file]})){try{await navigator.share({files:[file],title:"Abarbanel Item "+bagId});return;}catch(e){}}
-    const a=document.createElement("a");a.href=canvas.toDataURL("image/jpeg",.93);a.download="abarbanel-"+bagId+".jpg";a.click();
-  },"image/jpeg",.93);
+    if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){
+      try{await navigator.share({files:[file],title:"Abarbanel Item "+bagId});toast("Shared!");return;}
+      catch(e){if(e.name==="AbortError")return;}
+    }
+    // Fallback: download
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");a.href=url;a.download="abarbanel-"+bagId+".jpg";
+    document.body.appendChild(a);a.click();document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url),3000);
+    toast("Image saved — open WhatsApp to send");
+  }catch(err){
+    console.error("Share error:",err);
+    toast("Share error: "+err.message);
+  }
 }
 
 // ── EXPORT ──
